@@ -30,19 +30,23 @@ def draw_sample(axis: plt.Axes, env: SignalSearchEnv, sample_index: int) -> None
     axis.set_yticklabels([])
     axis.tick_params(length=0)
     axis.grid(color="#d0d7d0", linewidth=0.55)
-    mask = env._obstacle_mask(env._obstacle_samples()[sample_index])
+    env.reset(seed=100 + sample_index)
+    data = env.render_data()
+    mask = data["obstacles"]
     for x, y in np.argwhere(mask):
         lower_left = -env.boundary + np.array([x, y]) * env.cell_width
         axis.add_patch(Rectangle(lower_left, env.cell_width, env.cell_width, facecolor="#505b65", edgecolor="#f4f6f3", linewidth=0.45, zorder=3))
-    for target in env._layouts()[sample_index]:
+    for target, strength in zip(data["targets"], data["signal_strengths"], strict=True):
         axis.add_patch(Circle(target, 0.24, facecolor="#e9a86c", alpha=0.12, edgecolor="none", zorder=1))
-        axis.scatter(target[0], target[1], marker="*", s=105, color="#d65b36", edgecolors="white", linewidths=0.7, zorder=4)
+        axis.scatter(target[0], target[1], marker="*", s=80 + 20 * strength, color="#d65b36", edgecolors="white", linewidths=0.7, zorder=4)
     axis.add_patch(Circle((0, -1.90), 0.13, facecolor="#46637d", edgecolor="white", linewidth=0.8, zorder=4))
     axis.text(0, -1.90, "Base", color="white", ha="center", va="center", fontsize=7.5, fontweight="bold", zorder=5)
-    specs = env._obstacle_samples()[sample_index]
-    shape_names = {"h": "bar", "v": "bar", "block": "block", "L": "L"}
-    kinds = ", ".join(sorted(set(shape_names[item[0]] for item in specs)))
-    axis.set_title(f"Sample {sample_index + 1}  |  {int(mask.sum())} obstacle cells\n{kinds}", fontsize=10.5, fontweight="semibold", pad=7)
+    axis.set_title(
+        f"Sample {sample_index + 1}  |  {int(mask.sum())} obstacle cells\n{len(data['targets'])} targets with variable signal strengths",
+        fontsize=10.5,
+        fontweight="semibold",
+        pad=7,
+    )
 
 
 def main() -> None:

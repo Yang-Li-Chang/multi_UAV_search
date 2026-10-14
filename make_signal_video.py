@@ -26,7 +26,7 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=Path,
-        default=ROOT / "signal_experiments" / "diverse_obstacle_signal" / "maddpg_actor.pt",
+        default=ROOT / "signal_experiments" / "randomized_search" / "maddpg_actor.pt",
         help="trained actor checkpoint",
     )
     parser.add_argument(
@@ -101,7 +101,8 @@ def main() -> None:
     sensing = [plt.Circle((0, 0), 0.25, facecolor=color, edgecolor=color, linewidth=1, alpha=0.08, zorder=3) for color in colors]
     for ring in sensing:
         ax.add_patch(ring)
-    targets = [ax.plot([], [], marker="*", markersize=15, color="#e8751a", markeredgecolor="white", markeredgewidth=0.8, zorder=6)[0] for _ in range(env.num_targets)]
+    target_count = int(frames[0]["info"]["target_count"])
+    targets = [ax.plot([], [], marker="*", markersize=15, color="#e8751a", markeredgecolor="white", markeredgewidth=0.8, zorder=6)[0] for _ in range(target_count)]
     status = ax.text(-env.boundary + 0.04, env.boundary - 0.04, "", va="top", ha="left", fontsize=10, bbox={"facecolor": "#f8f7f2", "alpha": 0.91, "edgecolor": "#c7cdc7"}, zorder=8)
     note = ax.text(env.boundary - 0.04, -env.boundary + 0.04, "Signal field shown for the viewer\nPolicy receives only local signal + obstacle patches", va="bottom", ha="right", fontsize=8.5, bbox={"facecolor": "#f8f7f2", "alpha": 0.91, "edgecolor": "#c7cdc7"}, zorder=8)
     _ = note
@@ -116,10 +117,10 @@ def main() -> None:
 
     def smooth_signal_field(data: dict[str, object]) -> np.ndarray:
         field = np.zeros_like(field_x)
-        for position, found in zip(data["targets"], data["found"], strict=True):
+        for position, found, strength in zip(data["targets"], data["found"], data["signal_strengths"], strict=True):
             if not found:
                 distance_squared = (field_x - position[0]) ** 2 + (field_y - position[1]) ** 2
-                field += np.exp(-distance_squared / (2 * 0.24**2))
+                field += (strength / 3.0) * np.exp(-distance_squared / (2 * 0.24**2))
         return np.clip(field, 0.0, 1.0)
 
     def update(frame_index: int):
@@ -138,7 +139,7 @@ def main() -> None:
             target.set_color("#1a9850" if data["found"][k] else "#de2d26")
         info = frame["info"]
         status.set_text(
-            f"Step {int(info['steps'])}   Targets found: {int(info['targets_found'])}/3\n"
+            f"Step {int(info['steps'])}   Targets found: {int(info['targets_found'])}/{int(info['target_count'])}\n"
             f"Coverage: {info['coverage']:.0%}   UAV collisions: {int(info['collisions'])}"
         )
         return [signal_image, covered_image, *path_lines, *drones, *sensing, *targets, status]

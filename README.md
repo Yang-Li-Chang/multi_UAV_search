@@ -1,12 +1,13 @@
 # Multi-UAV Cooperative Search
 
-A compact MADDPG baseline for two UAVs that cooperatively search for three hidden static targets in an MPE2 two-dimensional environment.
+A compact MADDPG baseline for two UAVs that cooperatively search for a random number of hidden static targets in an MPE2 two-dimensional environment.
 
 ## Current task
 
 - **Map:** 30 × 30 grid over a continuous 2D area.
 - **Agents:** two UAVs launched from the same base area.
-- **Targets:** three static targets per episode. Target coordinates are not included in the policy observation.
+- **Targets:** each episode samples 2–5 static targets at random free locations. Target coordinates are not included in the policy observation.
+- **Signal strength:** every target independently samples a signal strength from four levels; its signal weakens with distance.
 - **Obstacle samples:** eight layouts with different counts and combinations of bars, blocks, and L-shaped no-fly regions.
 - **Observation:** own position and velocity, relative teammate position, found-target status, and local 3 × 3 patches for coverage, signal strength, and obstacles.
 - **Communication baseline:** UAVs share coverage and found-target status without communication interference. Interference can be added after this baseline is stable.

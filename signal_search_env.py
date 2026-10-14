@@ -14,26 +14,30 @@ RewardVariant = Literal["coverage", "signal", "shared_signal"]
 class SignalSearchEnv:
     """Search hidden static targets using only local signal and coverage observations.
 
-    Targets and 1x3 no-fly obstacles are sampled from several layouts at reset. Their coordinates are never
-    placed in the policy observation. Every undiscovered target emits a local field:
-    3 at its cell, 2 in nearby cells, 1 farther away, 0 elsewhere. The UAV sees only
-    its 3x3 neighbourhood. UAVs share their coverage maps and found-target status
+    Each episode samples a new obstacle map, target count, target positions, and target-signal strengths.
+    Target coordinates are never
+    placed in the policy observation. Every undiscovered target emits a local field;
+    each target samples its own signal strength and the field weakens with distance.
+    The UAV sees only its 3x3 neighbourhood. UAVs share their coverage maps and found-target status
     perfectly in this baseline (communication interference is intentionally absent).
     """
 
     def __init__(
         self,
         num_agents: int = 2,
-        num_targets: int = 3,
+        min_targets: int = 2,
+        max_targets: int = 5,
         grid_size: int = 30,
         max_steps: int = 420,
         reward_variant: RewardVariant = "signal",
         seed: int | None = None,
     ) -> None:
-        if num_agents != 2 or num_targets != 3:
-            raise ValueError("This baseline is intentionally fixed to two UAVs and three targets")
+        if num_agents != 2 or not 1 <= min_targets <= max_targets:
+            raise ValueError("Use two UAVs and a valid target-count range")
         self.num_agents = num_agents
-        self.num_targets = num_targets
+        self.min_targets = min_targets
+        self.max_targets = max_targets
+        self.target_count = min_targets
         self.grid_size = grid_size
         self.max_steps = max_steps
         self.reward_variant = reward_variant
@@ -42,7 +46,9 @@ class SignalSearchEnv:
         self.detect_radius = 0.18
         self.cell_width = 2.0 * self.boundary / grid_size
         self.world = self._make_world()
-        self.discovered = np.zeros(num_targets, dtype=bool)
+        self.active_targets = np.zeros(max_targets, dtype=bool)
+        self.discovered = np.zeros(max_targets, dtype=bool)
+        self.target_strengths = np.zeros(max_targets, dtype=np.float32)
         self.covered = np.zeros((grid_size, grid_size), dtype=bool)
         self.obstacles = np.zeros((grid_size, grid_size), dtype=bool)
         self.known_coverage = np.zeros((num_agents, grid_size, grid_size), dtype=bool)
@@ -57,9 +63,9 @@ class SignalSearchEnv:
 
     @property
     def obs_dim(self) -> int:
-        # self pos/vel, teammate rel-pos, found status, and local coverage/signal/obstacle
-        # patches, followed by shared coverage fraction and UAV id. No global route hint is given.
-        return 4 + 2 + self.num_targets + 9 + 9 + 9 + 1 + self.num_agents
+        # self pos/vel, teammate rel-pos, active/found target masks, and local
+        # coverage/signal/obstacle patches, followed by shared coverage fraction and UAV id.
+        return 4 + 2 + 2 * self.max_targets + 9 + 9 + 9 + 1 + self.num_agents
 
     def _make_world(self) -> World:
         world = World()
@@ -78,7 +84,7 @@ class SignalSearchEnv:
             agent.color = np.array([0.15 + 0.45 * i, 0.4, 0.85 - 0.35 * i])
             world.agents.append(agent)
         world.landmarks = []
-        for k in range(self.num_targets):
+        for k in range(self.max_targets):
             target = Landmark()
             target.name = f"hidden_target_{k}"
             target.size = 0.035
@@ -87,18 +93,6 @@ class SignalSearchEnv:
             target.color = np.array([0.85, 0.16, 0.14])
             world.landmarks.append(target)
         return world
-
-    def _layouts(self) -> list[np.ndarray]:
-        return [
-            np.array([[-1.75, 1.60], [1.55, 1.20], [0.20, -0.20]], dtype=np.float32),
-            np.array([[-1.55, -0.15], [1.70, 1.75], [-0.25, 1.10]], dtype=np.float32),
-            np.array([[-1.80, 0.35], [1.35, -1.00], [1.40, 1.65]], dtype=np.float32),
-            np.array([[-1.20, 1.75], [0.48, -1.12], [1.85, 0.25]], dtype=np.float32),
-            np.array([[-1.72, 1.10], [0.72, 1.62], [1.72, -0.62]], dtype=np.float32),
-            np.array([[-0.78, -0.55], [1.42, 0.62], [-1.55, 1.78]], dtype=np.float32),
-            np.array([[-1.68, 0.20], [0.40, 1.62], [1.65, -0.72]], dtype=np.float32),
-            np.array([[-1.22, -0.78], [1.52, 1.25], [-1.65, 1.50]], dtype=np.float32),
-        ]
 
     def _obstacle_samples(self) -> list[list[tuple[str, int, int, int, int]]]:
         """Eight obstacle maps: bars, blocks, L-shapes, and irregular combinations.
@@ -134,11 +128,31 @@ class SignalSearchEnv:
                 mask[cell_x, cell_y] = True
         return mask
 
+    def _sample_target_positions(self, count: int) -> np.ndarray:
+        """Sample separated free cells, keeping targets away from the shared launch base."""
+        free_cells = np.argwhere(~self.obstacles)
+        centers = -self.boundary + (free_cells.astype(np.float32) + 0.5) * self.cell_width
+        launch_base = np.array([0.0, -1.90], dtype=np.float32)
+        candidates = centers[np.linalg.norm(centers - launch_base, axis=1) >= 0.78]
+        selected: list[np.ndarray] = []
+        for index in self.rng.permutation(len(candidates)):
+            candidate = candidates[index]
+            if all(np.linalg.norm(candidate - existing) >= 0.76 for existing in selected):
+                jitter = self.rng.uniform(-0.035, 0.035, size=2).astype(np.float32)
+                selected.append(candidate + jitter)
+                if len(selected) == count:
+                    break
+        if len(selected) != count:
+            raise RuntimeError("Could not place the requested number of separated targets")
+        return np.asarray(selected, dtype=np.float32)
+
     def reset(self, seed: int | None = None) -> np.ndarray:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.steps = 0
         self.discovered[:] = False
+        self.active_targets[:] = False
+        self.target_strengths[:] = 0.0
         self.covered[:] = False
         self.obstacles[:] = False
         self.known_coverage[:] = False
@@ -154,11 +168,16 @@ class SignalSearchEnv:
             agent.state.c = np.zeros(0, dtype=np.float32)
             agent.action.u = np.zeros(2, dtype=np.float32)
             agent.action.c = np.zeros(0, dtype=np.float32)
-        layout_index = int(self.rng.integers(len(self._layouts())))
-        layout = self._layouts()[layout_index]
-        self.obstacles[:] = self._obstacle_mask(self._obstacle_samples()[layout_index])
-        for target, pos in zip(self.world.landmarks, layout, strict=True):
-            target.state.p_pos = pos.copy()
+        obstacle_index = int(self.rng.integers(len(self._obstacle_samples())))
+        self.obstacles[:] = self._obstacle_mask(self._obstacle_samples()[obstacle_index])
+        self.target_count = int(self.rng.integers(self.min_targets, self.max_targets + 1))
+        self.active_targets[: self.target_count] = True
+        self.target_strengths[: self.target_count] = self.rng.choice(
+            np.array([1.0, 1.6, 2.2, 3.0], dtype=np.float32), size=self.target_count, replace=True
+        )
+        positions = self._sample_target_positions(self.target_count)
+        for index, target in enumerate(self.world.landmarks):
+            target.state.p_pos = positions[index].copy() if self.active_targets[index] else np.array([9.0, 9.0], dtype=np.float32)
             target.state.p_vel = np.zeros(2, dtype=np.float32)
         for i, pos in enumerate(self._positions()):
             cell = self._cell_of(pos)
@@ -177,16 +196,18 @@ class SignalSearchEnv:
     def _signal_value(self, cell: np.ndarray) -> float:
         center = -self.boundary + (cell.astype(np.float32) + 0.5) * self.cell_width
         value = 0.0
-        for found, target in zip(self.discovered, self.world.landmarks, strict=True):
-            if found:
+        for active, found, strength, target in zip(
+            self.active_targets, self.discovered, self.target_strengths, self.world.landmarks, strict=True
+        ):
+            if not active or found:
                 continue
             distance = float(np.linalg.norm(center - target.state.p_pos))
             if distance <= 0.18:
-                value = max(value, 3.0)
+                value = max(value, float(strength))
             elif distance <= 0.42:
-                value = max(value, 2.0)
+                value = max(value, float(0.65 * strength))
             elif distance <= 0.72:
-                value = max(value, 1.0)
+                value = max(value, float(0.30 * strength))
         return value
 
     def _patch(self, matrix: np.ndarray, cell: np.ndarray) -> np.ndarray:
@@ -216,6 +237,7 @@ class SignalSearchEnv:
                 pos,
                 vel,
                 self.world.agents[other].state.p_pos.astype(np.float32) - pos,
+                self.active_targets.astype(np.float32),
                 self.discovered.astype(np.float32),
                 self._patch(self.known_coverage[i].astype(np.float32), cell),
                 self._signal_patch(cell),
@@ -275,7 +297,7 @@ class SignalSearchEnv:
         target_reward = np.zeros(self.num_agents, dtype=np.float32)
         final_finder = -1
         for k, target in enumerate(self.world.landmarks):
-            if self.discovered[k]:
+            if not self.active_targets[k] or self.discovered[k]:
                 continue
             distances = np.linalg.norm(positions - target.state.p_pos, axis=1)
             nearby = np.flatnonzero(distances <= self.detect_radius)
@@ -294,7 +316,7 @@ class SignalSearchEnv:
         individual = target_reward + new_cells - 0.1 * repeats - 5.0 * collisions - 2.0 * obstacle_hits - 0.005 * movement - 0.01
         if self.reward_variant in {"signal", "shared_signal"}:
             individual += 0.8 * signal_gain
-        success = bool(self.discovered.all())
+        success = bool(self.discovered[self.active_targets].all())
         if success and final_finder >= 0:
             individual[final_finder] += 20.0
         if self.reward_variant == "shared_signal":
@@ -304,7 +326,8 @@ class SignalSearchEnv:
         done = success or self.steps >= self.max_steps
         info = {
             "success": float(success),
-            "targets_found": float(self.discovered.sum()),
+            "targets_found": float(self.discovered[self.active_targets].sum()),
+            "target_count": float(self.target_count),
             "coverage": float(np.logical_and(self.covered, ~self.obstacles).sum() / (~self.obstacles).sum()),
             "repeat_events": float(repeats.sum()),
             "collisions": float(collisions.sum() / 2.0),
@@ -320,8 +343,11 @@ class SignalSearchEnv:
                 signal[x, y] = self._signal_value(np.array([x, y]))
         return {
             "positions": self._positions().copy(),
-            "targets": np.asarray([target.state.p_pos for target in self.world.landmarks], dtype=np.float32).copy(),
-            "found": self.discovered.copy(),
+            "targets": np.asarray(
+                [target.state.p_pos for index, target in enumerate(self.world.landmarks) if self.active_targets[index]], dtype=np.float32
+            ).copy(),
+            "found": self.discovered[self.active_targets].copy(),
+            "signal_strengths": self.target_strengths[self.active_targets].copy(),
             "coverage": self.covered.copy(),
             "obstacles": self.obstacles.copy(),
             "signal": signal,
