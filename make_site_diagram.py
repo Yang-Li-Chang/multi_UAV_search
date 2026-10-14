@@ -37,7 +37,7 @@ def main() -> None:
     axis.tick_params(length=0)
     axis.grid(color="#cbd2ca", linewidth=0.5)
     axis.set_title("Multi-UAV Cooperative Search Environment", fontsize=19, fontweight="semibold", pad=18)
-    axis.text(0, env.boundary + 0.13, "30 × 30 Grid   •   2 UAVs   •   3 Static Targets   •   6 × (1 × 3) Obstacles", ha="center", color="#566159", fontsize=10.5)
+    axis.text(0, env.boundary + 0.13, "30 × 30 Grid   •   2 UAVs   •   3 Static Targets   •   Variable Obstacle Layout", ha="center", color="#566159", fontsize=10.5)
 
     for x, y in np.argwhere(data["obstacles"]):
         lower_left = -env.boundary + np.array([x, y]) * env.cell_width
