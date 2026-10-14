@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+signal_experiments/
+*.pt
+*.mp4
+*.gif
+*.log
+.vscode/
