@@ -30,7 +30,7 @@ train_signal_search.py    # training and evaluation entry point
 make_signal_video.py      # MP4 / GIF trajectory animation after training
 make_site_diagram.py      # one environment-map image
 make_obstacle_samples.py  # four representative obstacle-map images
-samples/                  # generated map images for reports
+samples/                  # environment map, 4 individual maps, and a 4-map overview
 ```
 
 ## Install

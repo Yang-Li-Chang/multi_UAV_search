@@ -16,6 +16,7 @@ from signal_search_env import SignalSearchEnv
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "signal_experiments" / "progress_figures" / "obstacle-sample-maps.png"
+INDIVIDUAL_OUT = ROOT / "signal_experiments" / "progress_figures" / "individual_samples"
 
 
 def draw_sample(axis: plt.Axes, env: SignalSearchEnv, sample_index: int) -> None:
@@ -46,6 +47,7 @@ def draw_sample(axis: plt.Axes, env: SignalSearchEnv, sample_index: int) -> None
 
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    INDIVIDUAL_OUT.mkdir(parents=True, exist_ok=True)
     env = SignalSearchEnv()
     figure, axes = plt.subplots(2, 2, figsize=(10.8, 9.2), facecolor="white")
     figure.suptitle("Diverse Obstacle Environment Samples", fontsize=20, fontweight="bold", y=0.98)
@@ -54,6 +56,12 @@ def main() -> None:
         draw_sample(axis, env, sample_index)
     figure.tight_layout(rect=(0, 0, 1, 0.92))
     figure.savefig(OUT, dpi=240, bbox_inches="tight")
+    for sample_index in (0, 2, 5, 7):
+        single_figure, single_axis = plt.subplots(figsize=(6.2, 6.2), facecolor="white")
+        draw_sample(single_axis, env, sample_index)
+        single_figure.tight_layout()
+        single_figure.savefig(INDIVIDUAL_OUT / f"sample-{sample_index + 1}.png", dpi=240, bbox_inches="tight")
+        plt.close(single_figure)
     print(OUT)
 
 
